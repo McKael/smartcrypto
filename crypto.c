@@ -36,11 +36,11 @@ unsigned char* HexToBuf(char *hex)
 }
 void printBuffer(char *label, unsigned char *buf, int bufSize)
 {
-    printf("%s: ", label);
-    for(int i =0; i< bufSize; i++)
-    {
-        printf("%02x",buf[i]);
-    }
+	printf("%s: ", label);
+	for(int i =0; i< bufSize; i++)
+	{
+		printf("%02x",buf[i]);
+	}
 	puts("");
 }
 int EncryptParameterDataWithAES(unsigned char *pIn, unsigned char *pOut)
@@ -79,24 +79,21 @@ int generateServerHello(char *userId, char *pin, unsigned char *pOut)
 	unsigned char swapped[256];
 	unsigned char encrypted[256];
 	char dataText[2048];
-	char tmpText[1024];
-	char cmd[1024];
 	char hashText[256];
-	FILE *fp;
-	
+
 	SHA1((unsigned char*)pin, strlen((char*)pin), hash);
 	bufToHex(hash,(char*)hashText, 16,0);
 	printf("AES key: %s\n",hashText);
-	
+
 	memset(iv, 0, 16);
 	AES_128_CBC_Enc(publicKey, encrypted, hash, iv, 128);
 	bufToHex(encrypted,(char*)hashText, 128,0);
-	printf("AES encrypted: %s\n",hashText);
+	//printf("AES encrypted: %s\n",hashText);
 	EncryptParameterDataWithAES(encrypted,swapped);
 	bufToHex(swapped,(char*)hashText, 128,0);
-	printf("AES swapped: %s\n",hashText);
+	//printf("AES swapped: %s\n",hashText);
 
-	dataLen=0;	
+	dataLen=0;
 	memset(data,0,sizeof(data));
 	data[3]=strlen(userId);
 	dataLen+=4;
@@ -105,8 +102,7 @@ int generateServerHello(char *userId, char *pin, unsigned char *pOut)
 	memcpy(data+dataLen,swapped,128);
 	dataLen+=128;
 	bufToHex(data,dataText, dataLen,1);
-	printf("data buffer: %s\n",dataText);
-
+	//printf("data buffer: %s\n",dataText);
 
 	SHA1(data, dataLen, hash);
 	bufToHex(hash,(char*)hashText, SHA_DIGEST_LENGTH,0);
@@ -115,6 +111,7 @@ int generateServerHello(char *userId, char *pin, unsigned char *pOut)
 
 	return 0;
 }
+
 #define GX_SIZE 0x80
 #define USER_ID_POS 15
 int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* gUserId)
@@ -124,7 +121,9 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	unsigned char *aesKey=HexToBuf(aesKeyText), SKPrime[SHA_DIGEST_LENGTH+1], SKPrimeHash[SHA_DIGEST_LENGTH];
 	unsigned char *dest, *userId,pEncWBGx[GX_SIZE], pEncGx[GX_SIZE], *finalBuffer;
 	unsigned char iv[0x10],pGx[GX_SIZE],secretBytes[256], secretLen,thirdHashBuf[512];
-	unsigned int *l,firstLen,userIdLen,thirdLen,destLen, flagPos,finalPos;
+	unsigned int *l,/*firstLen,*/userIdLen,thirdLen,destLen, flagPos,finalPos;
+
+	/*
 	printf("\nhash: ");
 	for(int i =0; i< strlen(hashText)/2; i++)
 	{
@@ -135,8 +134,9 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	{
 		printf("%02x",aesKey[i]);
 	}
-	l=(unsigned int*)&dataBytes[7];
-	firstLen = htonl(*l);
+	*/
+	/*l=(unsigned int*)&dataBytes[7];
+	firstLen = htonl(*l);*/
 	l=(unsigned int*)&dataBytes[11];
 	userIdLen = htonl(*l);
 
@@ -145,7 +145,7 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	thirdLen = userIdLen + 132;
 	memcpy(dest,dataBytes+11,thirdLen);
 	memcpy(dest+thirdLen,hash,SHA_DIGEST_LENGTH);
-	
+
 	printf("\ndest: ");
 	for(int i =0; i< destLen; i++)
 	{
@@ -155,56 +155,62 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	userId=malloc(userIdLen+1);
 	memcpy(userId,dataBytes+USER_ID_POS,userIdLen);
 	userId[userIdLen]=0;
-	printf("\nuserId: %s\n",userId);
+	//printf("\nuserId: %s\n",userId);
 
 	memcpy(pEncWBGx,dataBytes+USER_ID_POS+userIdLen,GX_SIZE);
+	/*
 	printf("\npEncWBGx: ");
 	for(int i =0; i< GX_SIZE; i++)
 	{
 		printf("%02x",pEncWBGx[i]);
 	}
+	*/
 
 	DecryptParameterDataWithAES(pEncWBGx,pEncGx);
-	
+
+	/*
 	printf("\npEncGx: ");
 	for(int i =0; i< GX_SIZE; i++)
 	{
 		printf("%02x",pEncGx[i]);
 	}
+	*/
 
 	memset(iv, 0, 16);
 	AES_128_CBC_Dec(pEncGx, pGx, aesKey, iv, GX_SIZE);
-	
+
+	/*
 	printf("\npGx: ");
 	for(int i =0; i< GX_SIZE; i++)
 	{
 		printf("%02x",pGx[i]);
 	}
 	puts("");
+	*/
 
-    BIGNUM *bn_prime, *bn_pGx, *bn_publicKey, *bn_privateKey, *bn_secret;
-    BN_CTX *ctx; /* used internally by the bignum lib */
+	BIGNUM *bn_prime, *bn_pGx, /**bn_publicKey,*/ *bn_privateKey, *bn_secret;
+	BN_CTX *ctx; /* used internally by the bignum lib */
 
-    ctx = BN_CTX_new();
+	ctx = BN_CTX_new();
 	bn_secret = BN_new();
 	bn_prime = BN_bin2bn(prime,sizeof(prime),NULL);
 	bn_pGx= BN_bin2bn(pGx,GX_SIZE,NULL);
-	bn_publicKey = BN_bin2bn(publicKey,GX_SIZE,NULL);
+	/*bn_publicKey =*/ BN_bin2bn(publicKey,GX_SIZE,NULL);
 	bn_privateKey = BN_bin2bn(privateKey,GX_SIZE,NULL);
 	BN_mod_exp(bn_secret, bn_pGx, bn_privateKey, bn_prime,ctx);
 	//printf("Secret: %s\n",BN_bn2hex(bn_secret));
 	secretLen=BN_bn2bin(bn_secret,secretBytes);
-	printBuffer("secret",secretBytes,secretLen);
-	
+	//printBuffer("secret",secretBytes,secretLen);
+
 	memcpy(hash2,dataBytes+USER_ID_POS+userIdLen+GX_SIZE,SHA_DIGEST_LENGTH);
-	printBuffer("hash2",hash2,SHA_DIGEST_LENGTH);
-	
+	//printBuffer("hash2",hash2,SHA_DIGEST_LENGTH);
+
 	memcpy(thirdHashBuf, userId,strlen((char*)userId));
 	memcpy(thirdHashBuf+strlen((char*)userId), secretBytes, secretLen);
-	printBuffer("secret2",thirdHashBuf,secretLen+strlen((char*)userId));
-	
+	//printBuffer("secret2",thirdHashBuf,secretLen+strlen((char*)userId));
+
 	SHA1(thirdHashBuf,  secretLen+strlen((char*)userId), hash3);
-	printBuffer("hash3",hash3,SHA_DIGEST_LENGTH);
+	//printBuffer("hash3",hash3,SHA_DIGEST_LENGTH);
 	if(memcmp(hash2,hash3,SHA_DIGEST_LENGTH))
 	{
 		puts("Pin error!!!");
@@ -225,8 +231,8 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 		return -1;
 	}
 	SHA1(dest, destLen, dest_hash);
-	printBuffer("dest_hash",dest_hash,SHA_DIGEST_LENGTH);
-	
+	//printBuffer("dest_hash",dest_hash,SHA_DIGEST_LENGTH);
+
 	finalBuffer = malloc(userIdLen+ strlen((char*)userId)+ 384);
 	finalPos=0;
 	strcpy((char*)&finalBuffer[finalPos],(char*)userId);
@@ -242,11 +248,11 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 
 	SHA1(finalBuffer, finalPos, SKPrime);
 	SKPrime[SHA_DIGEST_LENGTH]=0;
-	printBuffer("SKPrime",SKPrime,SHA_DIGEST_LENGTH);
-	
+	//printBuffer("SKPrime",SKPrime,SHA_DIGEST_LENGTH);
+
 	SHA1(SKPrime, SHA_DIGEST_LENGTH+1, SKPrimeHash);
-	printBuffer("SKPrimeHash",SKPrimeHash,SHA_DIGEST_LENGTH);
+	//printBuffer("SKPrimeHash",SKPrimeHash,SHA_DIGEST_LENGTH);
 	applySamyGOKeyTransform(SKPrimeHash,SKPrimeHash);
-	printBuffer("ctx",SKPrimeHash,16);
+	//printBuffer("ctx",SKPrimeHash,16);
 	return 0;
 }
