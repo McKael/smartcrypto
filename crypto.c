@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <openssl/sha.h>
@@ -9,6 +8,7 @@
 #include "keys.h"
 #include "crypto.h"
 
+/*
 void bufToHex(unsigned char *buf, char *out, int len, int doBig)
 {
 	char tmpBuf[0x10];
@@ -36,7 +36,6 @@ unsigned char *HexToBuf(const char *hex)
 	}
 	return bytearray;
 }
-/*
 void printBuffer(char *label, unsigned char *buf, int bufSize)
 {
 	printf("%s: ", label);
@@ -54,7 +53,7 @@ int EncryptParameterDataWithAES(unsigned char *pIn, unsigned char *pOut)
 	for (num = 0u; num < 128u; num += 16u)
 	{
 		memset(iv, 0, 16);
-    	AES_128_CBC_Enc(pIn + num, pOut + num, wbKey, iv, 16);
+		AES_128_CBC_Enc(pIn + num, pOut + num, wbKey, iv, 16);
 	}
 	return 0;
 }
@@ -65,7 +64,7 @@ int DecryptParameterDataWithAES(unsigned char *pIn, unsigned char *pOut)
 	for (num = 0u; num < 128u; num += 16u)
 	{
 		memset(iv, 0, 16);
-    	AES_128_CBC_Dec(pIn + num, pOut + num, wbKey, iv, 16);
+		AES_128_CBC_Dec(pIn + num, pOut + num, wbKey, iv, 16);
 	}
 	return 0;
 }
@@ -74,7 +73,7 @@ void applySamyGOKeyTransform(unsigned char *pIn, unsigned char *pOut)
 	AES_128_Transform(3,transKey,pIn,pOut);
 }
 
-// Write the AES key, the digest hash as binary bytes (TODO) and the hello as hex
+// Write the AES key, the digest hash as binary bytes and the hello as hex
 // strings.  len is the maximum size for the hello string.
 // The pointers for the AES key and the hash should be large enough:
 // - aes_key is 16 bytes long
@@ -89,23 +88,31 @@ int generateServerHello(const char *userId, const char *pin,
 	unsigned char hash[SHA_DIGEST_LENGTH];
 	unsigned char swapped[256];
 	unsigned char encrypted[256];
-	char dataText[2048];
-	char hashText[256];
+	//char dataText[2048];
+	//char hashText[256];
 
 	SHA1((unsigned char*)pin, strlen((char*)pin), hash);
-	bufToHex(hash,(char*)hashText, 16,0);
-	//printf("AES key: %s\n",hashText);
+	memcpy(aes_key_out, hash, 16);
 
-	strncpy(aes_key_out, hashText, 32);
-	aes_key_out[32] = 0;
+	/*
+	bufToHex(hash,(char*)hashText, 16,0);
+	printf("AES key: %s\n",hashText);
+	*/
 
 	memset(iv, 0, 16);
 	AES_128_CBC_Enc(publicKey, encrypted, hash, iv, 128);
+
+	/*
 	bufToHex(encrypted,(char*)hashText, 128,0);
-	//printf("AES encrypted: %s\n",hashText);
+	printf("AES encrypted: %s\n",hashText);
+	*/
+
 	EncryptParameterDataWithAES(encrypted,swapped);
+
+	/*
 	bufToHex(swapped,(char*)hashText, 128,0);
-	//printf("AES swapped: %s\n",hashText);
+	printf("AES swapped: %s\n",hashText);
+	*/
 
 	dataLen=0;
 	memset(data,0,sizeof(data));
@@ -115,75 +122,85 @@ int generateServerHello(const char *userId, const char *pin,
 	dataLen+=strlen(userId);
 	memcpy(data+dataLen,swapped,128);
 	dataLen+=128;
+	/*
 	bufToHex(data,dataText, dataLen,1);
 	//printf("data buffer: %s\n",dataText);
+	*/
 
 	SHA1(data, dataLen, hash);
+	/*
 	bufToHex(hash,(char*)hashText, SHA_DIGEST_LENGTH,0);
-	//printf("hash: %s\n",hashText);
+	printf("hash: %s\n",hashText);
+	*/
 
-	strncpy(hash_out, hashText, SHA_DIGEST_LENGTH);
-	hash_out[SHA_DIGEST_LENGTH] = 0;
+	memcpy(hash_out, hash, SHA_DIGEST_LENGTH);
 
-	if (32+strlen(dataText) >= len) {
-		// The output hello string is too short
+	if (16+dataLen > len) {
+		// The output hello string doesn't fit
 		return -1;
 	}
 
+	const char header[] = {
+		0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+	};
+	memcpy(hello_out, header, sizeof(header));
+	int pos = sizeof(header);
+	hello_out[pos++] = 132+strlen(userId);
+	memcpy(&hello_out[pos], data, dataLen);
+	pos += dataLen;
+	memset(&hello_out[pos], 0, 5);
+	pos += 5;
+
 	//printf("ServerHello: 01020000000000000000%02lX%s0000000000\n",
 	//       132+strlen(userId), dataText);
-        return snprintf(hello_out, len,
-			"01020000000000000000%02lX%s0000000000",
-			132+strlen(userId), dataText);
+        return pos;
 }
 
 #define GX_SIZE 0x80
 #define USER_ID_POS 15
+// Parses the ClientHello message
+// All parameters but the gUserId are raw bytes.
 // Returns 0 if the client hello is parsed successfully;
 // Writes the SKPrime and ctx to the *_out variables.
 // The pointers should be large enough:
 // - SKPrime is 20 bytes long
 // - ctx is 16 bytes long
-int parseClientHello(const char *clientHello, const char *hashText, const char *aesKeyText,
-		const char *gUserId, char *skprime_out, char *ctx_out)
+int parseClientHello(const char *clientHello, unsigned int clientHelloSize,
+		const char *hash, const char *aesKey, const char *gUserId,
+		char *skprime_out, char *ctx_out)
 {
-	// FIXME can crash when hello has bogus len
-	unsigned char *dataBytes=HexToBuf(clientHello);
-	unsigned char *hash=HexToBuf(hashText),hash2[SHA_DIGEST_LENGTH], hash3[SHA_DIGEST_LENGTH];
+	unsigned char hash2[SHA_DIGEST_LENGTH], hash3[SHA_DIGEST_LENGTH];
 	// unsigned char dest_hash[SHA_DIGEST_LENGTH];
-	unsigned char *aesKey=HexToBuf(aesKeyText), SKPrime[SHA_DIGEST_LENGTH+1], SKPrimeHash[SHA_DIGEST_LENGTH];
+	unsigned char SKPrime[SHA_DIGEST_LENGTH+1], SKPrimeHash[SHA_DIGEST_LENGTH];
 	//unsigned char *dest;
 	unsigned char *userId,pEncWBGx[GX_SIZE], pEncGx[GX_SIZE], *finalBuffer;
 	unsigned char iv[0x10],pGx[GX_SIZE],secretBytes[256], secretLen,thirdHashBuf[512];
 	unsigned int *l,/*firstLen,*/userIdLen,/*thirdLen,destLen,*/ flagPos,finalPos;
+	unsigned int gUserIdLen;
 
-	/*
-	printf("\nhash: ");
-	for(int i =0; i< strlen(hashText)/2; i++)
-	{
-		printf("%02x",hash[i]);
+	gUserIdLen = strlen(gUserId);
+
+	// Check clientHelloSize looks large enough
+	if (clientHelloSize < gUserIdLen + USER_ID_POS + GX_SIZE + SHA_DIGEST_LENGTH + 2) {
+		return ERR_SC_BAD_CLIENTHELLO; // Client Hello looks too small
 	}
-	printf("\nAES key: ");
-	for(int i =0; i< strlen(aesKeyText)/2; i++)
-	{
-		printf("%02x",aesKey[i]);
-	}
-	*/
-	/*l=(unsigned int*)&dataBytes[7];
+
+	/*l=(unsigned int*)&clientHello[7];
 	firstLen = htonl(*l);*/
-	l=(unsigned int*)&dataBytes[11];
+	l=(unsigned int*)&clientHello[11];
 	userIdLen = htonl(*l);
+
+	if (userIdLen != gUserIdLen) {
+		return ERR_SC_BAD_USERID; // User IDs do not match
+	}
 
 	/*
 	destLen = userIdLen + 132 + SHA_DIGEST_LENGTH;
 	dest=malloc(destLen);
 	thirdLen = userIdLen + 132;
-	memcpy(dest,dataBytes+11,thirdLen);
+	memcpy(dest,clientHello+11,thirdLen);
 	memcpy(dest+thirdLen,hash,SHA_DIGEST_LENGTH);
 	*/
-
-	free(hash);
-	hash = NULL;
 
 	/*
 	printf("\ndest: ");
@@ -194,11 +211,15 @@ int parseClientHello(const char *clientHello, const char *hashText, const char *
 	*/
 
 	userId=malloc(userIdLen+1);
-	memcpy(userId,dataBytes+USER_ID_POS,userIdLen);
+	memcpy(userId,clientHello+USER_ID_POS,userIdLen);
 	userId[userIdLen]=0;
 	//printf("\nuserId: %s\n",userId);
 
-	memcpy(pEncWBGx,dataBytes+USER_ID_POS+userIdLen,GX_SIZE);
+	if (strcmp((const char *)userId, gUserId)) {
+		return ERR_SC_BAD_USERID; // User IDs do not match
+	}
+
+	memcpy(pEncWBGx,clientHello+USER_ID_POS+userIdLen,GX_SIZE);
 	/*
 	printf("\npEncWBGx: ");
 	for(int i =0; i< GX_SIZE; i++)
@@ -218,10 +239,7 @@ int parseClientHello(const char *clientHello, const char *hashText, const char *
 	*/
 
 	memset(iv, 0, 16);
-	AES_128_CBC_Dec(pEncGx, pGx, aesKey, iv, GX_SIZE);
-
-	free(aesKey);
-	aesKey = NULL;
+	AES_128_CBC_Dec(pEncGx, pGx, (const unsigned char*)aesKey, iv, GX_SIZE);
 
 	/*
 	printf("\npGx: ");
@@ -246,37 +264,28 @@ int parseClientHello(const char *clientHello, const char *hashText, const char *
 	secretLen=BN_bn2bin(bn_secret,secretBytes);
 	//printBuffer("secret",secretBytes,secretLen);
 
-	memcpy(hash2,dataBytes+USER_ID_POS+userIdLen+GX_SIZE,SHA_DIGEST_LENGTH);
+	memcpy(hash2,clientHello+USER_ID_POS+userIdLen+GX_SIZE,SHA_DIGEST_LENGTH);
 	//printBuffer("hash2",hash2,SHA_DIGEST_LENGTH);
 
 	memcpy(thirdHashBuf, userId,strlen((char*)userId));
 	memcpy(thirdHashBuf+strlen((char*)userId), secretBytes, secretLen);
 	//printBuffer("secret2",thirdHashBuf,secretLen+strlen((char*)userId));
 
-	SHA1(thirdHashBuf,  secretLen+strlen((char*)userId), hash3);
+	SHA1(thirdHashBuf, secretLen+strlen((char*)userId), hash3);
 	//printBuffer("hash3",hash3,SHA_DIGEST_LENGTH);
-	if(memcmp(hash2,hash3,SHA_DIGEST_LENGTH))
-	{
-		puts("Pin error!!!"); //XXX
-		return ERR_SC_PIN;
+	if (memcmp(hash2,hash3,SHA_DIGEST_LENGTH)) {
+		return ERR_SC_PIN; // Pin error
 	}
-	puts("Pin OK :)\n"); //XXX
+	// Pin OK :)
 
 	flagPos = strlen((char*)userId) + USER_ID_POS + GX_SIZE + SHA_DIGEST_LENGTH;
-	if(dataBytes[flagPos])
-	{
-		puts("First flag error!!!"); //XXX
-		return ERR_SC_FIRST_FLAG;
+	if (clientHello[flagPos]) {
+		return ERR_SC_FIRST_FLAG;   // First flag error
 	}
-	l=(unsigned int*)&dataBytes[flagPos+1];
-	if(htonl(*l))
-	{
-		puts("Second flag error!!!"); //XXX
-		return ERR_SC_SECOND_FLAG;
+	l=(unsigned int*)&clientHello[flagPos+1];
+	if (htonl(*l)) {
+		return ERR_SC_SECOND_FLAG;  // Second flag error
 	}
-
-	free(dataBytes);
-	dataBytes = NULL;
 
 	/*
 	SHA1(dest, destLen, dest_hash);
