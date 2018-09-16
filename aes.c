@@ -1355,7 +1355,7 @@ void AES_128_Transform(int Nr, unsigned char *key, unsigned char *plainText, uns
 }
 
 
-void aes_decrypt_128(unsigned char *plainText, unsigned char *cipherText, unsigned char *key){
+void aes_decrypt_128(unsigned char *plainText, unsigned char *cipherText, const unsigned char *key){
 	
 	u32 rk[4*(AES_128_ROUNDS + 1)];
 	int i;
@@ -1367,7 +1367,7 @@ void aes_decrypt_128(unsigned char *plainText, unsigned char *cipherText, unsign
 		
 }
 
-void aes_encrypt_128(unsigned char *plainText, unsigned char *cipherText, unsigned char *key){
+void aes_encrypt_128(unsigned char *plainText, unsigned char *cipherText, const unsigned char *key){
 	
 	u32 rk[4*(AES_128_ROUNDS + 1)];
 	int i;
@@ -1378,7 +1378,7 @@ void aes_encrypt_128(unsigned char *plainText, unsigned char *cipherText, unsign
 	for (i = 0; i < (4 * (AES_128_ROUNDS + 1)); i++) rk[i] = 0;
 		
 }
-void AES_128_CBC_Enc(unsigned char *plainText, unsigned char *cipherText, unsigned char *key, unsigned char *iv, int len)
+void AES_128_CBC_Enc(unsigned char *plainText, unsigned char *cipherText, const unsigned char *key, unsigned char *iv, int len)
 {
 	unsigned char plainCopy[16];
     for(int i = 0; i<len;i+=0x10)
@@ -1389,7 +1389,7 @@ void AES_128_CBC_Enc(unsigned char *plainText, unsigned char *cipherText, unsign
         memcpy(iv, cipherText+i,  16);
     }
 }
-void AES_128_CBC_Dec(unsigned char *cipherText, unsigned char *plainText, unsigned char *key, unsigned char *iv, int len)
+void AES_128_CBC_Dec(unsigned char *cipherText, unsigned char *plainText, const unsigned char *key, unsigned char *iv, int len)
 {
 	unsigned char cipherCopy[16];
     for(int i = 0; i<len;i+=0x10)
