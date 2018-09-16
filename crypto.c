@@ -1,13 +1,15 @@
-#include <openssl/sha.h>
-#include "keys.h"
-#include <memory.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "aes.h"
+#include <string.h>
+#include <openssl/sha.h>
 #include <openssl/bn.h>
 #include <arpa/inet.h>
 
-void bufToHex(unsigned char * buf, char *out, int len,int doBig)
+#include "aes.h"
+#include "keys.h"
+#include "crypto.h"
+
+void bufToHex(unsigned char *buf, char *out, int len, int doBig)
 {
 	char tmpBuf[0x10];
 	if(doBig)
@@ -23,7 +25,7 @@ void bufToHex(unsigned char * buf, char *out, int len,int doBig)
 		strcat(out,tmpBuf);
 	}
 }
-unsigned char* HexToBuf(char *hex)
+unsigned char *HexToBuf(const char *hex)
 {
 	int hexLen = strlen(hex);
 	unsigned char *bytearray = malloc(hexLen+10);
@@ -34,6 +36,7 @@ unsigned char* HexToBuf(char *hex)
 	}
 	return bytearray;
 }
+/*
 void printBuffer(char *label, unsigned char *buf, int bufSize)
 {
 	printf("%s: ", label);
@@ -43,6 +46,7 @@ void printBuffer(char *label, unsigned char *buf, int bufSize)
 	}
 	puts("");
 }
+*/
 int EncryptParameterDataWithAES(unsigned char *pIn, unsigned char *pOut)
 {
 	unsigned int num;
@@ -70,7 +74,14 @@ void applySamyGOKeyTransform(unsigned char *pIn, unsigned char *pOut)
 	AES_128_Transform(3,transKey,pIn,pOut);
 }
 
-int generateServerHello(char *userId, char *pin, unsigned char *pOut)
+// Write the AES key, the digest hash as binary bytes (TODO) and the hello as hex
+// strings.  len is the maximum size for the hello string.
+// The pointers for the AES key and the hash should be large enough:
+// - aes_key is 16 bytes long
+// - hash is 20 bytes long
+int generateServerHello(const char *userId, const char *pin,
+		char *hello_out, size_t len,
+		char *aes_key_out, char *hash_out)
 {
 	int dataLen;
 	unsigned char data[256];
@@ -83,7 +94,10 @@ int generateServerHello(char *userId, char *pin, unsigned char *pOut)
 
 	SHA1((unsigned char*)pin, strlen((char*)pin), hash);
 	bufToHex(hash,(char*)hashText, 16,0);
-	printf("AES key: %s\n",hashText);
+	//printf("AES key: %s\n",hashText);
+
+	strncpy(aes_key_out, hashText, 32);
+	aes_key_out[32] = 0;
 
 	memset(iv, 0, 16);
 	AES_128_CBC_Enc(publicKey, encrypted, hash, iv, 128);
@@ -106,22 +120,42 @@ int generateServerHello(char *userId, char *pin, unsigned char *pOut)
 
 	SHA1(data, dataLen, hash);
 	bufToHex(hash,(char*)hashText, SHA_DIGEST_LENGTH,0);
-	printf("hash: %s\n",hashText);
-	printf("ServerHello: 01020000000000000000%02lX%s0000000000\n",132+strlen(userId),dataText);
+	//printf("hash: %s\n",hashText);
 
-	return 0;
+	strncpy(hash_out, hashText, SHA_DIGEST_LENGTH);
+	hash_out[SHA_DIGEST_LENGTH] = 0;
+
+	if (32+strlen(dataText) >= len) {
+		// The output hello string is too short
+		return -1;
+	}
+
+	//printf("ServerHello: 01020000000000000000%02lX%s0000000000\n",
+	//       132+strlen(userId), dataText);
+        return snprintf(hello_out, len,
+			"01020000000000000000%02lX%s0000000000",
+			132+strlen(userId), dataText);
 }
 
 #define GX_SIZE 0x80
 #define USER_ID_POS 15
-int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* gUserId)
+// Returns 0 if the client hello is parsed successfully;
+// Writes the SKPrime and ctx to the *_out variables.
+// The pointers should be large enough:
+// - SKPrime is 20 bytes long
+// - ctx is 16 bytes long
+int parseClientHello(const char *clientHello, const char *hashText, const char *aesKeyText,
+		const char *gUserId, char *skprime_out, char *ctx_out)
 {
+	// FIXME can crash when hello has bogus len
 	unsigned char *dataBytes=HexToBuf(clientHello);
-	unsigned char *hash=HexToBuf(hashText),hash2[SHA_DIGEST_LENGTH], hash3[SHA_DIGEST_LENGTH],dest_hash[SHA_DIGEST_LENGTH];
+	unsigned char *hash=HexToBuf(hashText),hash2[SHA_DIGEST_LENGTH], hash3[SHA_DIGEST_LENGTH];
+	// unsigned char dest_hash[SHA_DIGEST_LENGTH];
 	unsigned char *aesKey=HexToBuf(aesKeyText), SKPrime[SHA_DIGEST_LENGTH+1], SKPrimeHash[SHA_DIGEST_LENGTH];
-	unsigned char *dest, *userId,pEncWBGx[GX_SIZE], pEncGx[GX_SIZE], *finalBuffer;
+	//unsigned char *dest;
+	unsigned char *userId,pEncWBGx[GX_SIZE], pEncGx[GX_SIZE], *finalBuffer;
 	unsigned char iv[0x10],pGx[GX_SIZE],secretBytes[256], secretLen,thirdHashBuf[512];
-	unsigned int *l,/*firstLen,*/userIdLen,thirdLen,destLen, flagPos,finalPos;
+	unsigned int *l,/*firstLen,*/userIdLen,/*thirdLen,destLen,*/ flagPos,finalPos;
 
 	/*
 	printf("\nhash: ");
@@ -140,17 +174,24 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	l=(unsigned int*)&dataBytes[11];
 	userIdLen = htonl(*l);
 
+	/*
 	destLen = userIdLen + 132 + SHA_DIGEST_LENGTH;
 	dest=malloc(destLen);
 	thirdLen = userIdLen + 132;
 	memcpy(dest,dataBytes+11,thirdLen);
 	memcpy(dest+thirdLen,hash,SHA_DIGEST_LENGTH);
+	*/
 
+	free(hash);
+	hash = NULL;
+
+	/*
 	printf("\ndest: ");
 	for(int i =0; i< destLen; i++)
 	{
 		printf("%02x",dest[i]);
 	}
+	*/
 
 	userId=malloc(userIdLen+1);
 	memcpy(userId,dataBytes+USER_ID_POS,userIdLen);
@@ -178,6 +219,9 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 
 	memset(iv, 0, 16);
 	AES_128_CBC_Dec(pEncGx, pGx, aesKey, iv, GX_SIZE);
+
+	free(aesKey);
+	aesKey = NULL;
 
 	/*
 	printf("\npGx: ");
@@ -213,25 +257,31 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	//printBuffer("hash3",hash3,SHA_DIGEST_LENGTH);
 	if(memcmp(hash2,hash3,SHA_DIGEST_LENGTH))
 	{
-		puts("Pin error!!!");
-		return -1;
+		puts("Pin error!!!"); //XXX
+		return ERR_SC_PIN;
 	}
-	puts("Pin OK :)\n");
+	puts("Pin OK :)\n"); //XXX
 
 	flagPos = strlen((char*)userId) + USER_ID_POS + GX_SIZE + SHA_DIGEST_LENGTH;
 	if(dataBytes[flagPos])
 	{
-		puts("First flag error!!!");
-		return -1;
+		puts("First flag error!!!"); //XXX
+		return ERR_SC_FIRST_FLAG;
 	}
 	l=(unsigned int*)&dataBytes[flagPos+1];
 	if(htonl(*l))
 	{
-		puts("Second flag error!!!");
-		return -1;
+		puts("Second flag error!!!"); //XXX
+		return ERR_SC_SECOND_FLAG;
 	}
+
+	free(dataBytes);
+	dataBytes = NULL;
+
+	/*
 	SHA1(dest, destLen, dest_hash);
 	//printBuffer("dest_hash",dest_hash,SHA_DIGEST_LENGTH);
+	*/
 
 	finalBuffer = malloc(userIdLen+ strlen((char*)userId)+ 384);
 	finalPos=0;
@@ -254,5 +304,19 @@ int parseClientHello(char *clientHello, char *hashText, char *aesKeyText, char* 
 	//printBuffer("SKPrimeHash",SKPrimeHash,SHA_DIGEST_LENGTH);
 	applySamyGOKeyTransform(SKPrimeHash,SKPrimeHash);
 	//printBuffer("ctx",SKPrimeHash,16);
+
+	//bufToHex(SKPrime,(char*)out, SHA_DIGEST_LENGTH,0);
+	//strncpy(skprime_out, out, SHA_DIGEST_LENGTH*2);
+	//skprime_out[SHA_DIGEST_LENGTH*2] = 0;
+	memcpy(skprime_out, SKPrime, SHA_DIGEST_LENGTH);
+
+	//bufToHex(SKPrimeHash,(char*)out, 16,0);
+	//strncpy(ctx_out, out, 16*2);
+	//ctx_out[16*2] = 0;
+	memcpy(ctx_out, SKPrimeHash, SHA_DIGEST_LENGTH);
+
+	free(userId);
+	free(finalBuffer);
+
 	return 0;
 }
