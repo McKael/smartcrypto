@@ -118,17 +118,3 @@ func aesDecryptCBC(key, cipherdata []byte) ([]byte, error) {
 	mode.CryptBlocks(plaindata, cipherdata)
 	return plaindata, nil
 }
-
-func applySamyGOKeyTransform(key, in []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(in) != block.BlockSize() {
-		return nil, errors.New("bad input size")
-	}
-
-	out := make([]byte, len(in))
-	block.Encrypt(out, in)
-	return out, nil
-}

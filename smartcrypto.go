@@ -1,11 +1,5 @@
 package smartcrypto
 
-// #cgo CFLAGS: -g -Wall
-// #cgo LDFLAGS: -lssl -lcrypto
-// #include <stdio.h> // for fflush
-// #include <stdlib.h>
-// #include "crypto.h"
-import "C"
 import (
 	"bytes"
 	"crypto/sha1"
@@ -13,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"unsafe"
 
 	"github.com/pkg/errors"
 )
@@ -26,54 +19,14 @@ type HelloData struct {
 
 // GenerateServerHello builds the Server Hello hex string
 func GenerateServerHello(hello *HelloData) ([]byte, error) {
+	// Basic userID length check
 	if len(hello.UserID) < 1 || len(hello.UserID) > 96 {
-		// Arbitrary length check
 		return nil, errors.New("invalid UserID size")
 	}
 
-	// Expected ServerHello length XXX
+	// Expected ServerHello length
 	expectedLength := 10 + 1 + (4 + len(hello.UserID) + 128) + 5
 
-	// C version
-	cUserID := C.CString(hello.UserID)
-	cPin := C.CString(hello.PIN)
-
-	bufSize := 2 * expectedLength
-
-	serverHello := C.malloc(C.sizeof_char * (C.ulong)(bufSize))
-	defer C.free(unsafe.Pointer(serverHello))
-
-	ctx := make([]byte, 20)
-	key := make([]byte, 16)
-
-	// data digest "hash" is (20B*2) long
-	// "AES key" hash is (16B*2) long
-	n := C.generateServerHello(cUserID, cPin,
-		(*C.char)(serverHello), (C.ulong)(expectedLength),
-		(*C.char)(unsafe.Pointer(&key[0])),
-		(*C.char)(unsafe.Pointer(&ctx[0])))
-	//C.fflush(C.stdout) // for C debug messages
-
-	hl := int(n)
-	if hl < 0 {
-		return nil, errors.New("generateServerHello() failed")
-	}
-	if hl != expectedLength { // XXX keep
-		return nil, errors.New("unexpected Hello length")
-	}
-
-	hello.Key = key
-	hello.Ctx = ctx
-
-	serverHelloBytes := C.GoBytes(unsafe.Pointer(serverHello), n)
-
-	// Go version
-
-	/*
-		h := sha1.New()
-		h.Write([]byte(hello.PIN))
-		pinHash := h.Sum(nil)
-	*/
 	pinHash := sha1.Sum([]byte(hello.PIN))
 	fmt.Printf("PIN hash: %02x\n", pinHash)
 
@@ -82,11 +35,13 @@ func GenerateServerHello(hello *HelloData) ([]byte, error) {
 		panic("invalid pinHash: " + hex.EncodeToString(pinHash[:]))
 	}
 
-	goKey := pinHash[:16]
-	// Assertion
-	if bytes.Compare(goKey, hello.Key) != 0 {
-		panic("invalid key: " + hex.EncodeToString(goKey))
-	}
+	hello.Key = pinHash[:16]
+	/*
+		// Assertion
+		if bytes.Compare(hello.Key, ...) != 0 {
+			panic("invalid key: " + hex.EncodeToString(hello.Key))
+		}
+	*/
 
 	encrypted, err := aesEncryptCBC(hello.Key, publicKey)
 	if err != nil {
@@ -100,7 +55,7 @@ func GenerateServerHello(hello *HelloData) ([]byte, error) {
 
 	swapped, err := aesEncryptECB(wbKey, encrypted)
 	if err != nil {
-		panic(err.Error()) // TODO remove panics
+		return nil, errors.Wrap(err, "aesEncryptECB failed")
 	}
 	swapped = swapped[:128]
 	fmt.Printf("swapped: %02x\n", swapped)
@@ -110,19 +65,25 @@ func GenerateServerHello(hello *HelloData) ([]byte, error) {
 		panic("invalid swapped")
 	}
 
+	// Compute ctx
 	var dataBuf bytes.Buffer
 	binary.Write(&dataBuf, binary.BigEndian, uint32(len(hello.UserID)))
 	dataBuf.WriteString(hello.UserID)
 	dataBuf.Write(swapped)
 
 	dataHash := sha1.Sum(dataBuf.Bytes()) // ctx
-	fmt.Printf("data hash: %02x\n", dataHash)
+	hello.Ctx = dataHash[:]
 
-	// Assertion
-	if bytes.Compare(dataHash[:], hello.Ctx) != 0 {
-		panic("invalid swapped")
-	}
+	fmt.Printf("data hash (ctx): %02x\n", dataHash)
 
+	/*
+		// Assertion
+		if bytes.Compare(hello.Ctx, ...) != 0 {
+			panic("invalid swapped")
+		}
+	*/
+
+	// dataBuf will contain the ServerHello bytes
 	var serverHelloBuf bytes.Buffer
 
 	// Header
@@ -138,9 +99,16 @@ func GenerateServerHello(hello *HelloData) ([]byte, error) {
 	//fmt.Printf("expect hello: %02X\n", serverHelloBytes)
 	fmt.Printf("server hello: %02X\n", serverHelloBuf.Bytes())
 
-	// Assertion
-	if bytes.Compare(serverHelloBuf.Bytes(), serverHelloBytes) != 0 {
-		panic("invalid serverHello")
+	/*
+		// Assertion
+		if bytes.Compare(serverHelloBuf.Bytes(), serverHelloBytes) != 0 {
+			panic("invalid serverHello")
+		}
+	*/
+
+	if serverHelloBuf.Len() != expectedLength {
+		return nil, errors.Errorf("unexpected ServerHello length (got %d, want %d)",
+			serverHelloBuf.Len(), expectedLength)
 	}
 
 	return serverHelloBuf.Bytes(), nil
@@ -149,34 +117,15 @@ func GenerateServerHello(hello *HelloData) ([]byte, error) {
 // ParseClientHello parses the client message and checks it's valid
 // Returns (SKPrime, ctx) and an error if it failed.
 func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, error) {
+	const gxSize = 0x80
+
 	data, err := hex.DecodeString(clientHello)
 	if err != nil {
 		return nil, nil, errors.New("could not decode ClientHello string")
 	}
 
-	cUserID := C.CString(hello.UserID)
-	cHash := (*C.char)(unsafe.Pointer(&hello.Ctx[0]))
-	cAESKey := (*C.char)(unsafe.Pointer(&hello.Key[0]))
-	cClientHello := (*C.char)(unsafe.Pointer(&data[0]))
-
-	//println("ClientHello:", clientHello)
-
-	// "skprime" is (20B) long
-	// "ctx" is (16B) long
-	skprime := make([]byte, 32)
-	ctx := make([]byte, 32)
-
-	r := C.parseClientHello(cClientHello, (C.uint)(len(clientHello)/2),
-		cHash, cAESKey, cUserID,
-		(*C.char)(unsafe.Pointer(&skprime[0])),
-		(*C.char)(unsafe.Pointer(&ctx[0])))
-	// C.fflush(C.stdout) // for C debug messages
-
-	// ### <Go version>
-
-	const gxSize = 0x80
-
 	// TODO check CH length looks acceptable --  >= 4[=int32]+128[=gx]+20[=sha]+len(userID)
+	// Not sure the userID length should be used though
 	println("CH length:", len(data))
 
 	dataBuf := bytes.NewReader(data)
@@ -196,7 +145,7 @@ func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, erro
 	if err := binary.Read(dataBuf, binary.BigEndian, &payloadSize); err != nil {
 		// XXX Could not read len1
 	}
-	// TODO check length // len(userID)+132+sha(=20)
+	// TODO check length // len(userID)+132+sha(=20)  (not sure 'bout userID)
 	println("len1: ", payloadSize)
 
 	// data[11:15]
@@ -206,10 +155,6 @@ func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, erro
 	println("len2: ", length)
 	if length+152 > payloadSize { // check uid len is reasonable
 		return nil, nil, errors.New("invalid client ID length")
-	}
-	// XXX remove this check when done with debug prints
-	if int(length) != len(hello.UserID) {
-		println("client user-id length does not match our user-id")
 	}
 
 	clientUserID := make([]byte, length)
@@ -285,6 +230,7 @@ func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, erro
 		panic("invalid clientHash")
 	}
 
+	// Flags
 	if flag, err := dataBuf.ReadByte(); err != nil {
 		panic("failed to read ClientHello's flag #1")
 	} else {
@@ -294,7 +240,6 @@ func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, erro
 		}
 	}
 
-	// Flags
 	var clientFlag2 uint32
 	if err := binary.Read(dataBuf, binary.BigEndian, &clientFlag2); err != nil {
 		panic("failed to read ClientHello's flag #2")
@@ -326,51 +271,28 @@ func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, erro
 	h.Write(publicKey)
 	h.Write(secret)
 	calculatedHash = h.Sum(nil) // skprime  TODO rename XXX
-	fmt.Printf("calculated hash #2 (skprime): %02x\n", calculatedHash)
+	skprime := calculatedHash[:]
+	fmt.Printf("calculated hash #2 (skprime): %02x\n", skprime)
 
 	// Assertion
-	if bytes.Compare(calculatedHash, skprime[:20]) != 0 {
+	if bytes.Compare(skprime, dbgHexToBytes("0817b063a0609dd37285c0d188a9e347f6ede809")) != 0 {
 		return nil, nil, errors.New("bad skprime")
 	}
 
 	skprimeHash := sha1.Sum(skprime[:21])
 	fmt.Printf("skprimehash: %02x\n", skprimeHash)
 
-	tmpCtx, err := applySamyGOKeyTransform(transKey, skprimeHash[:16])
+	fmt.Printf("transKey: %02x\n", transKey)
+
+	ctx, err := keyTransform(transKey, skprimeHash[:16])
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "KeyTransform failed")
 	}
-	fmt.Printf("ctx: %02x\n", tmpCtx)
-	fmt.Printf("exp: %02x\n", ctx)
+	fmt.Printf("ctx: %02x\n", ctx)
 
-	// Assertion
-	if bytes.Compare(tmpCtx, ctx[:16]) != 0 {
-		return nil, nil, errors.New("bad ctx")
-	}
+	// XXX ctx = ctx[:16]  // ???
 
-	// ### </Go version>
-
-	if r != 0 {
-		var msg string
-		switch r {
-		case C.ERR_SC_PIN:
-			msg = "pin error"
-		case C.ERR_SC_FIRST_FLAG:
-			msg = "bad user id"
-		case C.ERR_SC_BAD_USERID:
-			msg = "first flag error"
-		case C.ERR_SC_SECOND_FLAG:
-			msg = "second flag error"
-		case C.ERR_SC_BAD_CLIENTHELLO:
-			msg = "suspicious ClientHello"
-		default:
-			msg = "unknown error"
-		}
-
-		return nil, nil, errors.New("Client Hello parsing failed: " + msg)
-	}
-
-	return skprime[:20], ctx[:16], nil
+	return skprime, ctx, nil
 }
 
 // GenerateServerAcknowledge builds the ServerAcknowledge data string
