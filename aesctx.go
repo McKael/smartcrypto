@@ -1,20 +1,10 @@
 package smartcrypto
 
-// #cgo CFLAGS: -g -Wall
-// #cgo LDFLAGS: -lssl -lcrypto
-// #include "aes.h"
-//
-// void applySamyGOKeyTransform2(const unsigned char *tKey,
-// 	unsigned char *pIn, unsigned char *pOut) {
-// 	AES_128_Transform(3, tKey, pIn, pOut);
-// }
-import "C"
-
 import (
 	"crypto/aes"
 	"errors"
 	"fmt"
-	"unsafe"
+	//"unsafe"
 )
 
 // keyTransform returns the ctx built from the input hash
@@ -30,21 +20,18 @@ func keyTransform(key []byte, in []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// C implementation
-	cCtx := make([]byte, bs)
-	C.applySamyGOKeyTransform2(
-		(*C.uchar)(unsafe.Pointer(&key[0])),
-		(*C.uchar)(unsafe.Pointer(&in[0])),
-		(*C.uchar)(unsafe.Pointer(&cCtx[0])),
-	)
+	// Transpiled algorithm
+	tCtx := make([]byte, bs)
+	aes128transform(3, &key[0], &in[0], &tCtx[0])
 
-	// TODO comp goCtx / cCtx
+	// comp goCtx / tCtx
 	fmt.Printf("goCtx: %02x\n", goCtx)
-	fmt.Printf("cCtx:  %02x\n", cCtx)
+	fmt.Printf("tCtx:  %02x\n", tCtx)
 
-	return cCtx, err
+	return tCtx, err
 }
 
+// This one does not work as expected
 func applySamyGOKeyTransform(key, in []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
