@@ -3,8 +3,6 @@ package smartcrypto
 import (
 	"crypto/aes"
 	"errors"
-	"fmt"
-	//"unsafe"
 )
 
 // keyTransform returns the ctx built from the input hash
@@ -15,20 +13,23 @@ func keyTransform(key []byte, in []byte) ([]byte, error) {
 	}
 
 	// XXX Can't find how to write a Go implementation
-	goCtx, err := applySamyGOKeyTransform(key, in)
-	if err != nil {
-		return nil, err
-	}
+	/*
+		goCtx, err := applySamyGOKeyTransform(key, in)
+		if err != nil {
+			return nil, err
+		}
+	*/
 
 	// Transpiled algorithm
 	tCtx := make([]byte, bs)
 	aes128transform(3, &key[0], &in[0], &tCtx[0])
 
-	// comp goCtx / tCtx
-	fmt.Printf("goCtx: %02x\n", goCtx)
-	fmt.Printf("tCtx:  %02x\n", tCtx)
+	/*
+		fmt.Printf("goCtx: %02x\n", goCtx)
+		fmt.Printf("tCtx:  %02x\n", tCtx)
+	*/
 
-	return tCtx, err
+	return tCtx, nil
 }
 
 // This one does not work as expected
