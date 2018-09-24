@@ -218,6 +218,10 @@ func ParseClientHello(hello HelloData, clientHello string) ([]byte, []byte, erro
 	calculatedHash := h.Sum(nil)
 	//fmt.Printf("calculated hash #1: %02x\n", calculatedHash)
 
+	if bytes.Compare(calculatedHash, clientHash) != 0 {
+		return nil, nil, errors.New("bad PIN")
+	}
+
 	// PIN is OK;
 	// Compute key and hash
 
