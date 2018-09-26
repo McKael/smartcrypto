@@ -73,18 +73,7 @@ func aesDecryptECB(key, cipherdata []byte) ([]byte, error) {
 		plainrange = plainrange[bs:]
 	}
 
-	/*
-		// Remove padding
-		if i := bytes.IndexFunc(plaindata, func(r rune) bool {
-			if r < 16 {
-				return true
-			}
-			return false
-		}); i >= 0 {
-			plaindata = plaindata[:i]
-		}
-	*/
-
+	// There is no padding
 	return plaindata, nil
 }
 
